@@ -660,20 +660,24 @@ mod tests {
 
     impl Render for TriggerStyleHarness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Keep the trigger clear of the popup's window margin so the
+            // content origin reflects only the trigger container's bounds.
             div().size_full().child(
-                Popover::new("trigger-style-popover")
-                    .default_open(true)
-                    .appearance(false)
-                    .offset(px(0.))
-                    .when(self.styled, |this| {
-                        this.trigger_style(StyleRefinement::default().p(px(10.)))
-                    })
-                    .trigger(Button::new("styled-trigger").size(px(40.)))
-                    .child(
-                        div()
-                            .debug_selector(|| "styled-content".into())
-                            .size(px(20.)),
-                    ),
+                div().absolute().left(px(100.)).top(px(100.)).child(
+                    Popover::new("trigger-style-popover")
+                        .default_open(true)
+                        .appearance(false)
+                        .offset(px(0.))
+                        .when(self.styled, |this| {
+                            this.trigger_style(StyleRefinement::default().p(px(10.)))
+                        })
+                        .trigger(Button::new("styled-trigger").size(px(40.)))
+                        .child(
+                            div()
+                                .debug_selector(|| "styled-content".into())
+                                .size(px(20.)),
+                        ),
+                ),
             )
         }
     }
@@ -691,7 +695,7 @@ mod tests {
         // Unstyled: the content sits directly under the 40px trigger.
         assert_eq!(
             window.debug_bounds("styled-content").unwrap().origin,
-            point(px(0.), px(40.))
+            point(px(100.), px(140.))
         );
 
         window.update(|window, cx| {
@@ -706,7 +710,7 @@ mod tests {
         // the popup is positioned against those bounds rather than the trigger's.
         assert_eq!(
             window.debug_bounds("styled-content").unwrap().origin,
-            point(px(0.), px(60.))
+            point(px(100.), px(160.))
         );
     }
 
