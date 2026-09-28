@@ -1,7 +1,7 @@
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Div, ElementId,
     FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement, PathBuilder,
-    Pixels, Point, RenderOnce, Stateful, StyleRefinement, Styled, Window, canvas, div, point,
+    Pixels, Point, RenderOnce, Stateful, StyleRefinement, Styled, Window, canvas, point,
     prelude::FluentBuilder as _, px,
 };
 use std::{cell::Cell, rc::Rc, time::Duration};
@@ -122,8 +122,8 @@ pub struct Popover {
         >,
     >,
     children: Vec<AnyElement>,
-    /// Style for trigger element.
-    /// This is used for hotfix the trigger element style to support w_full.
+    /// Style for the trigger container, the element laid out in the parent
+    /// and measured to anchor the popup.
     trigger_style: Option<StyleRefinement>,
     mouse_button: MouseButton,
     appearance: bool,
@@ -230,7 +230,11 @@ impl Popover {
         self
     }
 
-    /// Set the style for the trigger element.
+    /// Set the style for the trigger container.
+    ///
+    /// The container is the element laid out in the parent and measured to
+    /// anchor the popup, so this is where `w_full` or `flex_1` must go for the
+    /// trigger to fill its slot.
     pub fn trigger_style(mut self, style: StyleRefinement) -> Self {
         self.trigger_style = Some(style);
         self
@@ -398,20 +402,8 @@ impl RenderOnce for Popover {
                         )
                     })
             })
-            .when_some(self.trigger, |this, trigger| {
-                this.trigger_with(move |is_open, window, cx| {
-                    let trigger = trigger(is_open, window, cx);
-                    // A styled trigger is wrapped so the refinement lands on the
-                    // container the popup measures and positions against, rather
-                    // than on the trigger element itself. A trigger with no
-                    // `trigger_style` is passed through untouched, so the wrapper
-                    // never appears in a layout that did not ask for one.
-                    match trigger_style {
-                        Some(style) => div().child(trigger).refine_style(&style).into_any_element(),
-                        None => trigger,
-                    }
-                })
-            })
+            .when_some(self.trigger, |this, trigger| this.trigger_with(trigger))
+            .when_some(trigger_style, |this, style| this.refine_style(&style))
             .when_some(self.open, |this, open| this.open(open))
             .when_some(self.tracked_focus_handle, |this, handle| {
                 this.track_focus(&handle)
@@ -503,7 +495,7 @@ fn arrow_join_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{button::Button, theme::Theme};
+    use crate::{button::Button, h_flex, theme::Theme};
     use gpui::{Bounds, Context, MouseButton, Point, Render, div, point, px, size};
     use gpui_base::Popup as BasePopup;
     use std::{cell::RefCell, rc::Rc};
@@ -663,39 +655,45 @@ mod tests {
             // Keep the trigger clear of the popup's window margin so the
             // content origin reflects only the trigger container's bounds.
             div().size_full().child(
-                div().absolute().left(px(100.)).top(px(100.)).child(
-                    Popover::new("trigger-style-popover")
-                        .default_open(true)
-                        .appearance(false)
-                        .offset(px(0.))
-                        .when(self.styled, |this| {
-                            this.trigger_style(StyleRefinement::default().p(px(10.)))
-                        })
-                        .trigger(Button::new("styled-trigger").size(px(40.)))
-                        .child(
-                            div()
-                                .debug_selector(|| "styled-content".into())
-                                .size(px(20.)),
-                        ),
-                ),
+                h_flex()
+                    .absolute()
+                    .left(px(100.))
+                    .top(px(100.))
+                    .w(px(200.))
+                    .child(
+                        Popover::new("trigger-style-popover")
+                            .default_open(true)
+                            .appearance(false)
+                            .offset(px(0.))
+                            .anchor(Anchor::TopRight)
+                            .when(self.styled, |this| {
+                                this.trigger_style(StyleRefinement::default().w_full())
+                            })
+                            .trigger(Button::new("styled-trigger").size(px(40.)))
+                            .child(
+                                div()
+                                    .debug_selector(|| "styled-content".into())
+                                    .size(px(20.)),
+                            ),
+                    ),
             )
         }
     }
 
-    /// `trigger_style` is a public setter, and the popup anchors to the bounds of
-    /// the trigger container. Before this was applied at render time the
-    /// refinement was stored and dropped, so a caller that sized or inset its
-    /// trigger got neither the layout nor the position it asked for.
+    /// `trigger_style` styles the container the parent lays out and the popup
+    /// is anchored to. Applied to anything nested inside it, `w_full` would
+    /// resolve against a container that only wraps its content.
     #[gpui::test]
     fn trigger_style_is_applied_to_the_trigger_container(cx: &mut gpui::TestAppContext) {
         cx.update(crate::init);
         let (view, window) = cx.add_window_view(|_, _| TriggerStyleHarness { styled: false });
         window.update(|window, cx| window.draw(cx).clear(cx));
         window.update(|window, cx| window.draw(cx).clear(cx));
-        // Unstyled: the content sits directly under the 40px trigger.
+        // Unstyled: the container wraps the 40px trigger, so the content's right
+        // edge meets the trigger's right edge at 140px.
         assert_eq!(
             window.debug_bounds("styled-content").unwrap().origin,
-            point(px(100.), px(140.))
+            point(px(120.), px(140.))
         );
 
         window.update(|window, cx| {
@@ -706,11 +704,11 @@ mod tests {
             window.draw(cx).clear(cx);
         });
         window.update(|window, cx| window.draw(cx).clear(cx));
-        // 10px of padding on each side grows the trigger container to 60px, and
-        // the popup is positioned against those bounds rather than the trigger's.
+        // `w_full` stretches the container across the 200px row, and the popup
+        // follows the container's right edge at 300px.
         assert_eq!(
             window.debug_bounds("styled-content").unwrap().origin,
-            point(px(100.), px(160.))
+            point(px(280.), px(140.))
         );
     }
 
