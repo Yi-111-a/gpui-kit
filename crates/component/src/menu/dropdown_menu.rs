@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::{
     Anchor, AnyElement, App, Context, DismissEvent, Element, ElementId, Entity, FocusHandle,
     Focusable, GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId,
-    RenderOnce, SharedString, StyleRefinement, Styled, Window, prelude::FluentBuilder,
+    RenderOnce, SharedString, Styled, Window, prelude::FluentBuilder,
 };
 
 use crate::{Selectable, button::Button, menu::PopupMenu, popover::Popover};
@@ -24,30 +24,9 @@ pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement +
         anchor: impl Into<Anchor>,
         f: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
     ) -> DropdownMenuPopover<Self> {
-        let style = trigger_layout(self.style());
         let id = self.interactivity().element_id.clone();
 
-        DropdownMenuPopover::new(id.unwrap_or(0.into()), anchor, self, f).trigger_style(style)
-    }
-}
-
-/// The part of a trigger's style that decides the slot it takes in its parent.
-///
-/// The popover wraps the trigger in a container, and that container is what
-/// the parent lays out, so `w_full` or `flex_1` on the trigger has to reach it
-/// too. Everything else — padding, margin, background, border — stays on the
-/// trigger alone; copying it would apply it twice.
-fn trigger_layout(style: &StyleRefinement) -> StyleRefinement {
-    StyleRefinement {
-        display: style.display,
-        size: style.size.clone(),
-        min_size: style.min_size.clone(),
-        max_size: style.max_size.clone(),
-        flex_grow: style.flex_grow,
-        flex_shrink: style.flex_shrink,
-        flex_basis: style.flex_basis,
-        align_self: style.align_self,
-        ..Default::default()
+        DropdownMenuPopover::new(id.unwrap_or(0.into()), anchor, self, f)
     }
 }
 
@@ -56,7 +35,6 @@ impl DropdownMenu for Button {}
 #[derive(IntoElement)]
 pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {
     id: ElementId,
-    style: StyleRefinement,
     anchor: Anchor,
     trigger: T,
     builder: Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>,
@@ -75,7 +53,6 @@ where
     ) -> Self {
         Self {
             id: SharedString::from(format!("dropdown-menu:{:?}", id)).into(),
-            style: StyleRefinement::default(),
             anchor: anchor.into(),
             trigger,
             builder: Rc::new(builder),
@@ -86,12 +63,6 @@ where
     /// Set the anchor corner for the dropdown menu popover.
     pub fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
         self.anchor = anchor.into();
-        self
-    }
-
-    /// Set the style refinement for the dropdown menu trigger.
-    fn trigger_style(mut self, style: StyleRefinement) -> Self {
-        self.style = style;
         self
     }
 
@@ -142,7 +113,6 @@ where
             .appearance(false)
             .overlay_closable(false)
             .trigger(self.trigger)
-            .trigger_style(self.style)
             .anchor(self.anchor)
             .when_some(self.on_open_change, |this, callback| {
                 this.on_open_change(move |open, window, cx| callback(open, window, cx))
@@ -325,27 +295,6 @@ mod tests {
     actions!(dropdown_menu_test, [CopyText]);
 
     const CONTEXT: &str = "dropdown_menu_test";
-
-    /// The trigger keeps its own style, so only the fields that place it in the
-    /// parent are copied to the popover container; the rest would apply twice.
-    #[test]
-    fn test_trigger_layout_copies_only_placement() {
-        let style = StyleRefinement::default()
-            .w_full()
-            .flex_1()
-            .p(px(10.))
-            .m(px(4.))
-            .border_1()
-            .bg(gpui::red());
-        let layout = trigger_layout(&style);
-
-        assert_eq!(layout.size, style.size);
-        assert_eq!(layout.flex_grow, Some(1.));
-        assert_eq!(layout.padding, Default::default());
-        assert_eq!(layout.margin, Default::default());
-        assert_eq!(layout.border_widths, Default::default());
-        assert_eq!(layout.background, None);
-    }
 
     /// The story shape: the key binding lives in the key context of the
     /// trigger's ancestor, the menu names no `action_context`, and other
