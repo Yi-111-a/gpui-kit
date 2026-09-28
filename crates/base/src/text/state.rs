@@ -340,19 +340,22 @@ impl TextViewState {
 
     /// Set the text content.
     ///
-    /// With a streamed fade-in enabled, text that extends the current text
-    /// fades in like [`Self::push_str`] would; any other replacement shows at
-    /// once.
+    /// Text that extends the current non-empty text is parsed incrementally
+    /// like [`Self::push_str`]. With a streamed fade-in enabled, extended
+    /// text fades in; any other replacement shows at once.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.text.as_str() == text {
             return;
         }
+        if !self.text.is_empty() && text.starts_with(self.text.as_str()) {
+            let delta = &text[self.text.len()..];
+            self.stream_fade.note_extend(self.text.len());
+            self.text.push_str(delta);
+            self.increment_update(delta, true, cx);
+            return;
+        }
         if self.stream_fade.is_enabled() {
-            if text.starts_with(self.text.as_str()) {
-                self.stream_fade.note_extend(self.text.len());
-            } else {
-                self.stream_fade.note_replace();
-            }
+            self.stream_fade.note_replace();
         }
 
         self.text.clear();
@@ -1739,6 +1742,80 @@ mod tests {
             assert!(state.select_all);
             assert_eq!(state.selected_text().trim(), "new text");
         });
+    }
+
+    #[gpui::test]
+    fn set_text_prefix_extension_updates_incrementally_like_push_str(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown("hello", cx)));
+        cx.run_until_parked();
+
+        let initial_selection_revision = state.read_with(cx, |state, _| state.selection_revision);
+        let initial_full_update_rev = state.read_with(cx, |state, _| state.full_update_revision);
+
+        // Extending with set_text parses incrementally like push_str
+        state.update(cx, |state, cx| {
+            state.set_text("hello world", cx);
+        });
+        cx.run_until_parked();
+
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.text.as_str(), "hello world");
+            assert_eq!(state.source().as_str(), "hello world");
+            assert_eq!(state.selection_revision, initial_selection_revision);
+            assert_eq!(state.full_update_revision, initial_full_update_rev);
+        });
+
+        // Replacing with non-extending text performs full replacement and bumps revision
+        state.update(cx, |state, cx| {
+            state.set_text("completely different", cx);
+        });
+        cx.run_until_parked();
+
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.text.as_str(), "completely different");
+            assert_eq!(state.source().as_str(), "completely different");
+            assert_ne!(state.selection_revision, initial_selection_revision);
+            assert_ne!(state.full_update_revision, initial_full_update_rev);
+        });
+    }
+
+    #[gpui::test]
+    fn set_text_streaming_matches_push_str_parsed_content(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let state_stream = cx.update(|cx| cx.new(|cx| TextViewState::markdown("initial", cx)));
+        let state_push = cx.update(|cx| cx.new(|cx| TextViewState::markdown("initial", cx)));
+        cx.run_until_parked();
+
+        let chunks = [
+            " paragraph\n\n",
+            "second paragraph with ",
+            "`code`",
+            "\n\n- list item 1\n- list item 2",
+        ];
+        let mut accumulated = "initial".to_string();
+
+        for chunk in chunks {
+            accumulated.push_str(chunk);
+            state_stream.update(cx, |state, cx| {
+                state.set_text(&accumulated, cx);
+            });
+            state_push.update(cx, |state, cx| {
+                state.push_str(chunk, cx);
+            });
+            cx.run_until_parked();
+        }
+
+        let doc_stream =
+            state_stream.read_with(cx, |state, _| state.parsed_content.document.clone());
+        let doc_push = state_push.read_with(cx, |state, _| state.parsed_content.document.clone());
+
+        assert_eq!(doc_stream.source, doc_push.source);
+        assert_eq!(doc_stream.blocks.len(), doc_push.blocks.len());
+        for (b1, b2) in doc_stream.blocks.iter().zip(doc_push.blocks.iter()) {
+            assert_eq!(b1.text(), b2.text());
+            assert_eq!(b1.span(), b2.span());
+        }
     }
 
     #[test]
